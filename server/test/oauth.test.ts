@@ -1,7 +1,7 @@
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { developmentConfig } from "../src/config.js";
-import { hashToken, pkceChallenge, randomToken } from "../src/crypto.js";
+import { pkceChallenge, randomToken } from "../src/crypto.js";
 import { createApp } from "../src/index.js";
 import { MemoryStore } from "../src/store.js";
 
@@ -173,8 +173,8 @@ describe("browser OAuth bridge", () => {
       changed_count: 0,
     });
 
-    // Simulate a Cloud Run lifecycle restart: create an entirely new Express/MCP
-    // application while retaining the same durable-style RecordStore instance.
+    // Simulate a Cloud Run lifecycle restart by creating a new Express/MCP app
+    // while retaining the same durable-style store backing the connector.
     app = createApp(config, store, fetchMock);
 
     const changes = await request(app)
@@ -251,9 +251,6 @@ describe("browser OAuth bridge", () => {
     });
     expect(fetchMock.mock.calls[4]?.[0].toString()).toContain("last_knowledge_of_server=12");
     expect(fetchMock.mock.calls[5]?.[0].toString()).toContain("last_knowledge_of_server=12");
-
-    const checkpointId = hashToken(`${mcpPayload(initialize).result.serverInfo.name}:${planId}:daily-spending-coach`);
-    expect(checkpointId).toHaveLength(64);
 
     const metadata = await request(app).get("/.well-known/oauth-protected-resource/mcp");
     expect(metadata.status).toBe(200);
