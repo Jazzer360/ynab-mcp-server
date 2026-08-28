@@ -1,0 +1,23 @@
+{
+  "name": "financial-analysis-for-ynab",
+  "version": "0.1.0",
+  "description": "Read-only financial health and major-purchase analysis using connected YNAB plan data.",
+  "author": {
+    "name": "Derek Jass"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Financial Analysis for YNAB",
+    "shortDescription": "Read-only financial health and purchase analysis.",
+    "longDescription": "Connects to a YNAB plan with read-only OAuth access and analyzes liquidity, commitments, cash flow, reserves, debt, and major-purchase scenarios.",
+    "developerName": "Derek Jass",
+    "category": "Finance",
+    "capabilities": ["Read"],
+    "defaultPrompt": [
+      "Assess my current financial health.",
+      "Can I safely afford a major purchase?",
+      "Compare paying cash with financing."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

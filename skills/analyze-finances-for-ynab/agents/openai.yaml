@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Finances for YNAB"
+  short_description: "Evaluate financial health and major purchases"
+  default_prompt: "Use $analyze-finances-for-ynab to assess my financial position and whether a major purchase fits safely."
