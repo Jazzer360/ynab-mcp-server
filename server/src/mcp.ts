@@ -62,6 +62,75 @@ export function createYnabMcpServer(
   };
 
   server.registerTool(
+    "get_transaction_changes",
+    {
+      title: "Recent YNAB transaction changes — persistent checkpoint",
+      description: "Read recent transactions and transaction changes since last check using YNAB delta synchronization and a persistent checkpoint. The first call establishes a baseline and returns no historical transactions; later calls return settled transactions posted, edited, or deleted since that checkpoint. Pending transactions are not exposed by the public YNAB API.",
+      inputSchema: z.object({
+        plan_id: planId,
+        checkpoint_name: checkpointName,
+        include_payees: z.boolean().default(false),
+        include_memos: z.boolean().default(false),
+        limit: z.number().int().min(1).max(500).default(200),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ plan_id, checkpoint_name, include_payees, include_memos, limit }) =>
+      withClient(async (client) => {
+        const plans = plan_id ? [{ id: plan_id }] : await client.listPlans();
+        const resolvedPlanId = plan_id ?? (plans.length === 1 ? plans[0]?.id : undefined);
+        if (!resolvedPlanId) {
+          throw new Error("Multiple YNAB plans are available; specify plan_id from list_plans");
+        }
+
+        const checkpointId = hashToken(`${grantId}:${resolvedPlanId}:${checkpoint_name}`);
+        const checkpoint = await store.get<TransactionChangeCheckpoint>("transaction_change_checkpoints", checkpointId);
+        if (checkpoint && (
+          checkpoint.grantId !== grantId
+          || checkpoint.planId !== resolvedPlanId
+          || checkpoint.checkpointName !== checkpoint_name
+        )) {
+          throw new Error("Stored transaction-change checkpoint does not match the authenticated grant and plan");
+        }
+
+        const changes = await client.transactionChanges({
+          planId: resolvedPlanId,
+          ...(checkpoint ? { lastKnowledgeOfServer: checkpoint.serverKnowledge } : {}),
+          includePayees: include_payees,
+          includeMemos: include_memos,
+          limit,
+        });
+
+        const checkpointAdvanced = !changes.truncated;
+        if (checkpointAdvanced) {
+          await store.put<TransactionChangeCheckpoint>("transaction_change_checkpoints", checkpointId, {
+            grantId,
+            planId: resolvedPlanId,
+            checkpointName: checkpoint_name,
+            serverKnowledge: changes.server_knowledge,
+            updatedAt: Math.floor(Date.now() / 1000),
+          });
+        }
+
+        return {
+          checkpoint_name,
+          checkpoint_advanced: checkpointAdvanced,
+          ...changes,
+          note: changes.initialized
+            ? "Change tracking was initialized. No historical transactions are reported on the baseline call."
+            : changes.truncated
+              ? "The transaction-change delta exceeded the requested limit, so the persistent checkpoint was not advanced. Retry with a higher limit to avoid skipping changes."
+              : "Includes settled YNAB transaction changes since the prior successful check for this persistent checkpoint; pending transactions remain unavailable.",
+        };
+      }),
+  );
+
+  server.registerTool(
     "connection_status",
     {
       title: "YNAB connection status",
@@ -191,58 +260,6 @@ export function createYnabMcpServer(
         includeMemos: include_memos,
         limit,
       })),
-  );
-
-  server.registerTool(
-    "get_transaction_changes",
-    {
-      title: "Get YNAB transaction changes since the last check",
-      description: "Return settled YNAB transactions posted, edited, or deleted since this named consumer's last successful check. The first call establishes a baseline and returns no historical changes. Pending transactions are not exposed by the YNAB API.",
-      inputSchema: z.object({
-        plan_id: planId,
-        checkpoint_name: checkpointName,
-        include_payees: z.boolean().default(false),
-        include_memos: z.boolean().default(false),
-        limit: z.number().int().min(1).max(500).default(200),
-      }),
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: true,
-      },
-    },
-    async ({ plan_id, checkpoint_name, include_payees, include_memos, limit }) =>
-      withClient(async (client) => {
-        const plans = plan_id ? [{ id: plan_id }] : await client.listPlans();
-        const resolvedPlanId = plan_id ?? (plans.length === 1 ? plans[0]?.id : undefined);
-        if (!resolvedPlanId) {
-          throw new Error("Multiple YNAB plans are available; specify plan_id from list_plans");
-        }
-        const checkpointId = hashToken(`${grantId}:${resolvedPlanId}:${checkpoint_name}`);
-        const checkpoint = await store.get<TransactionChangeCheckpoint>("transaction_change_checkpoints", checkpointId);
-        const changes = await client.transactionChanges({
-          planId: resolvedPlanId,
-          ...(checkpoint ? { lastKnowledgeOfServer: checkpoint.serverKnowledge } : {}),
-          includePayees: include_payees,
-          includeMemos: include_memos,
-          limit,
-        });
-        await store.put<TransactionChangeCheckpoint>("transaction_change_checkpoints", checkpointId, {
-          grantId,
-          planId: resolvedPlanId,
-          checkpointName: checkpoint_name,
-          serverKnowledge: changes.server_knowledge,
-          updatedAt: Math.floor(Date.now() / 1000),
-        });
-        return {
-          checkpoint_name,
-          ...changes,
-          note: changes.initialized
-            ? "Change tracking was initialized. No historical transactions are reported on the baseline call."
-            : "Includes settled YNAB transactions changed since the prior successful call for this checkpoint; pending transactions remain unavailable.",
-        };
-      }),
   );
 
   return server;

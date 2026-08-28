@@ -2,7 +2,7 @@
 
 The server is designed for a private Google Cloud Run deployment backed by Firestore. It must be publicly reachable because ChatGPT and YNAB need to complete OAuth redirects, but every MCP request is protected by OAuth and the YNAB grant requests only `read-only` access.
 
-Do not paste the YNAB client secret, token-encryption key, authorization codes, or access tokens into ChatGPT.
+Do not paste the YNAB client secret, token-encryption key, authorization codes, access tokens, transaction payloads, payees, or memos into ChatGPT or deployment logs.
 
 ## Project defaults
 
@@ -23,7 +23,18 @@ The bootstrap script safely reuses resources that already exist. It enables the 
 
 ### Update an existing deployment
 
-When the Google Cloud resources and OAuth application already exist, deploy code updates from this directory without rerunning either setup script:
+When the Google Cloud resources and OAuth application already exist, first verify that the deployed service is still configured to use Firestore:
+
+```powershell
+gcloud run services describe financial-analysis-for-ynab `
+  --project=ynab-mcp-504216 `
+  --region=us-central1 `
+  --format="yaml(spec.template.spec.containers[0].env,spec.template.spec.serviceAccountName)"
+```
+
+Confirm that the output contains `STORE_BACKEND: firestore`, the expected `GOOGLE_CLOUD_PROJECT`, and the dedicated runtime service account. Do not redeploy until that is true; `STORE_BACKEND=memory` would intentionally lose OAuth and transaction synchronization state on a Cloud Run restart.
+
+Deploy code updates from this directory without rerunning either setup script:
 
 ```powershell
 gcloud run deploy financial-analysis-for-ynab `
@@ -33,7 +44,9 @@ gcloud run deploy financial-analysis-for-ynab `
   --quiet
 ```
 
-This preserves the service's environment variables, secret mappings, service account, URL, and OAuth registrations. After deployment, open the developer-mode plugin in ChatGPT and select **Refresh** so ChatGPT discovers newly added tools. Existing YNAB authorization remains valid.
+This preserves the service's environment variables, secret mappings, service account, URL, OAuth registrations, Firestore-backed grants, and transaction-change checkpoints. After deployment, open the developer-mode connector in ChatGPT and select **Refresh** so ChatGPT rediscovers the tool catalog. Existing YNAB authorization remains valid.
+
+For `get_transaction_changes`, Firestore stores only synchronization metadata: grant ID, plan ID, checkpoint name, YNAB `server_knowledge`, and update timestamp. The checkpoint document ID is a cryptographic hash of the authenticated grant, plan, and checkpoint name. Transaction payloads, payees, and memos are never persisted in checkpoint records.
 
 ### Windows PowerShell
 
@@ -98,14 +111,23 @@ On Windows PowerShell, use:
 
 ## 4. Verify the deployment
 
-Check these public endpoints before installing the plugin:
+Check these public endpoints before installing the connector:
 
 - `<PUBLIC_BASE_URL>/health` returns `{"status":"ok"}`.
-- `<PUBLIC_BASE_URL>/privacy` displays the current data policy.
+- `<PUBLIC_BASE_URL>/privacy` describes persistent synchronization metadata and confirms transaction responses are not stored.
 - `<PUBLIC_BASE_URL>/.well-known/oauth-protected-resource/mcp` identifies the MCP resource and authorization server.
 - `<PUBLIC_BASE_URL>/.well-known/oauth-authorization-server` advertises authorization, token, registration, and revocation endpoints.
 
 Do not test by manually copying authorization codes or tokens. Use an OAuth-capable MCP client so PKCE and state validation remain intact.
+
+For a post-deployment checkpoint test, use an authorized MCP client and the stable checkpoint name `daily-spending-coach`:
+
+1. Confirm `get_transaction_changes` appears in the normal tool catalog near the front and is marked read-only.
+2. Call it once with `checkpoint_name = "daily-spending-coach"`. If no checkpoint exists yet, expect `initialized: true`, `changed_count: 0`, and `checkpoint_advanced: true`.
+3. Call it again after a settled YNAB change and confirm `initialized: false` and `previous_server_knowledge` equals the prior call's `server_knowledge`.
+4. Deploy a no-op revision or otherwise restart the Cloud Run instance, then call the same checkpoint again. It must continue from the prior `server_knowledge`; it must not initialize again.
+5. If a call returns `truncated: true`, confirm `checkpoint_advanced: false`. Retry with a higher limit and verify the same `previous_server_knowledge` is used so no transactions are skipped.
+6. Disconnect/delete the connector grant and confirm the associated synchronization checkpoint is removed with the grant.
 
 ## 5. Connect the plugin
 
@@ -126,4 +148,4 @@ Also add the deployed website and privacy-policy URLs to `.codex-plugin/plugin.j
 
 ## 6. Revoke and delete
 
-Disconnecting the plugin should revoke its MCP token. An authenticated client can call `DELETE /connection` to delete the stored grant and both connector token families. The user can independently revoke the upstream authorization from YNAB Developer Settings.
+Disconnecting the connector should revoke its MCP token. An authenticated client can call `DELETE /connection` to delete the stored grant, connector token families, and transaction-change checkpoints associated with that grant. The user can independently revoke the upstream authorization from YNAB Developer Settings.

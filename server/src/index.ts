@@ -89,18 +89,18 @@ export function createApp(config: AppConfig, store: RecordStore, fetchImpl: type
   app.get("/privacy", (_req, res) => {
     res.type("html").send(page(
       "Privacy Policy — Financial Analysis for YNAB",
-      `<h1>Privacy Policy</h1><p><strong>Last updated: August 1, 2026</strong></p>
+      `<h1>Privacy Policy</h1><p><strong>Last updated: August 28, 2026</strong></p>
       <h2>Purpose and data access</h2><p>This connector accesses YNAB plan data only after the user authorizes YNAB's read-only OAuth scope. It may retrieve plans, accounts, categories, targets, months, scheduled transactions, and transactions to answer the user's financial-analysis requests.</p>
-      <h2>Storage and security</h2><p>YNAB access and refresh tokens are encrypted at rest. Connector access and refresh tokens are stored only as cryptographic hashes. The service does not persist YNAB plan, account, category, or transaction responses. Application logs must not contain tokens, authorization headers, transaction data, payees, or memos.</p>
+      <h2>Storage and security</h2><p>YNAB access and refresh tokens are encrypted at rest. Connector access and refresh tokens are stored only as cryptographic hashes. To support transaction-change synchronization across service restarts, the connector also persists minimal synchronization metadata: the connector grant identifier, YNAB plan identifier, checkpoint name, YNAB server-knowledge cursor, and update timestamp. Checkpoint document identifiers are derived from a cryptographic hash of the authenticated grant, plan, and checkpoint name. The service does not persist YNAB plan, account, category, transaction, payee, or memo responses. Application logs must not contain tokens, authorization headers, transaction data, payees, or memos.</p>
       <h2>Sharing</h2><p>Requested YNAB data is returned to the user's authorized ChatGPT or MCP client so it can answer the user's request. Data is not sold and is not intentionally disclosed to anyone else. The client provider's own privacy and retention terms also apply to data it receives.</p>
-      <h2>Retention and deletion</h2><p>OAuth grants and encrypted tokens remain until the user disconnects the connector, deletes the connection, or the authorization is revoked. Disconnecting deletes stored grant and token records. Users can also revoke the application from YNAB Developer Settings.</p>
+      <h2>Retention and deletion</h2><p>OAuth grants, encrypted tokens, and transaction synchronization checkpoints remain until the user disconnects the connector, deletes the connection, or the authorization is revoked. Disconnecting deletes stored grant, token, and associated checkpoint records. Users can also revoke the application from YNAB Developer Settings.</p>
       <h2>Changes</h2><p>If the connector's data access or use changes materially, this policy will be updated and users will be asked to consent again before the changed access is used.</p>`,
     ));
   });
   app.get("/delete", (_req, res) => {
     res.type("html").send(page(
       "Delete connection — Financial Analysis for YNAB",
-      "<h1>Delete your connection</h1><p>Disconnect this connector from ChatGPT to revoke its MCP session, then revoke the OAuth application in YNAB Developer Settings. An authenticated client can also send <code>DELETE /connection</code>, which immediately deletes the connector's stored grant and token records.</p>",
+      "<h1>Delete your connection</h1><p>Disconnect this connector from ChatGPT to revoke its MCP session, then revoke the OAuth application in YNAB Developer Settings. An authenticated client can also send <code>DELETE /connection</code>, which immediately deletes the connector's stored grant, token, and transaction synchronization checkpoint records.</p>",
     ));
   });
 
