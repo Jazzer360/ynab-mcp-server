@@ -1,7 +1,7 @@
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { developmentConfig } from "../src/config.js";
-import { pkceChallenge, randomToken } from "../src/crypto.js";
+import { hashToken, pkceChallenge, randomToken } from "../src/crypto.js";
 import { createApp } from "../src/index.js";
 import { MemoryStore } from "../src/store.js";
 
@@ -23,7 +23,7 @@ function mcpToolData(response: request.Response): Record<string, any> {
 }
 
 describe("browser OAuth bridge", () => {
-  it("completes MCP OAuth through YNAB read-only authorization", async () => {
+  it("persists transaction-change checkpoints across app recreation without advancing truncated deltas", async () => {
     const config = developmentConfig();
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({ access_token: "ynab-access", refresh_token: "ynab-refresh", expires_in: 7200 }))
@@ -41,8 +41,23 @@ describe("browser OAuth bridge", () => {
           deleted: false,
         }],
         server_knowledge: 12,
+      } }))
+      .mockResolvedValueOnce(jsonResponse({ data: {
+        transactions: [
+          { id: "change-13", date: "2026-08-19", amount_currency: -3, deleted: false },
+          { id: "change-14", date: "2026-08-20", amount_currency: -4, deleted: false },
+        ],
+        server_knowledge: 15,
+      } }))
+      .mockResolvedValueOnce(jsonResponse({ data: {
+        transactions: [
+          { id: "change-13", date: "2026-08-19", amount_currency: -3, deleted: false },
+          { id: "change-14", date: "2026-08-20", amount_currency: -4, deleted: false },
+        ],
+        server_knowledge: 15,
       } }));
-    const app = createApp(config, new MemoryStore(), fetchMock);
+    const store = new MemoryStore();
+    let app = createApp(config, store, fetchMock);
     const redirectUri = "https://chatgpt.com/connector_platform_oauth_redirect";
 
     const registration = await request(app).post("/register").send({
@@ -116,9 +131,23 @@ describe("browser OAuth bridge", () => {
       .set("MCP-Protocol-Version", "2025-06-18")
       .send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
     expect(tools.status).toBe(200);
-    const listedTools = mcpPayload(tools).result.tools as Array<{ annotations?: { readOnlyHint?: boolean } }>;
+    const listedTools = mcpPayload(tools).result.tools as Array<{
+      name: string;
+      title?: string;
+      description?: string;
+      annotations?: { readOnlyHint?: boolean };
+    }>;
     expect(listedTools).toHaveLength(9);
     expect(listedTools.every((tool) => tool.annotations?.readOnlyHint)).toBe(true);
+    expect(listedTools[0]).toMatchObject({
+      name: "get_transaction_changes",
+      title: expect.stringContaining("persistent checkpoint"),
+    });
+    expect(listedTools[0]?.description).toContain("recent transactions");
+    expect(listedTools[0]?.description).toContain("transaction changes");
+    expect(listedTools[0]?.description).toContain("since last check");
+    expect(listedTools[0]?.description).toContain("delta");
+    expect(listedTools[0]?.description).toContain("persistent checkpoint");
 
     const planId = "11111111-1111-4111-8111-111111111111";
     const baseline = await request(app)
@@ -138,10 +167,15 @@ describe("browser OAuth bridge", () => {
     expect(baseline.status).toBe(200);
     expect(mcpToolData(baseline)).toMatchObject({
       checkpoint_name: "daily-spending-coach",
+      checkpoint_advanced: true,
       initialized: true,
       server_knowledge: 10,
       changed_count: 0,
     });
+
+    // Simulate a Cloud Run lifecycle restart: create an entirely new Express/MCP
+    // application while retaining the same durable-style RecordStore instance.
+    app = createApp(config, store, fetchMock);
 
     const changes = await request(app)
       .post("/mcp")
@@ -159,12 +193,67 @@ describe("browser OAuth bridge", () => {
       });
     expect(changes.status).toBe(200);
     expect(mcpToolData(changes)).toMatchObject({
+      checkpoint_advanced: true,
       initialized: false,
       previous_server_knowledge: 10,
       server_knowledge: 12,
       changed_count: 1,
       transactions: [expect.objectContaining({ id: "changed-transaction", date: "2026-08-18" })],
     });
+    expect(fetchMock.mock.calls[3]?.[0].toString()).toContain("last_knowledge_of_server=10");
+
+    const truncated = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${token.body.access_token}`)
+      .set("Accept", "application/json, text/event-stream")
+      .set("MCP-Protocol-Version", "2025-06-18")
+      .send({
+        jsonrpc: "2.0",
+        id: 5,
+        method: "tools/call",
+        params: {
+          name: "get_transaction_changes",
+          arguments: { plan_id: planId, checkpoint_name: "daily-spending-coach", limit: 1 },
+        },
+      });
+    expect(truncated.status).toBe(200);
+    expect(mcpToolData(truncated)).toMatchObject({
+      checkpoint_advanced: false,
+      previous_server_knowledge: 12,
+      server_knowledge: 15,
+      changed_count: 2,
+      returned_count: 1,
+      truncated: true,
+    });
+
+    const retry = await request(app)
+      .post("/mcp")
+      .set("Authorization", `Bearer ${token.body.access_token}`)
+      .set("Accept", "application/json, text/event-stream")
+      .set("MCP-Protocol-Version", "2025-06-18")
+      .send({
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: {
+          name: "get_transaction_changes",
+          arguments: { plan_id: planId, checkpoint_name: "daily-spending-coach", limit: 500 },
+        },
+      });
+    expect(retry.status).toBe(200);
+    expect(mcpToolData(retry)).toMatchObject({
+      checkpoint_advanced: true,
+      previous_server_knowledge: 12,
+      server_knowledge: 15,
+      changed_count: 2,
+      returned_count: 2,
+      truncated: false,
+    });
+    expect(fetchMock.mock.calls[4]?.[0].toString()).toContain("last_knowledge_of_server=12");
+    expect(fetchMock.mock.calls[5]?.[0].toString()).toContain("last_knowledge_of_server=12");
+
+    const checkpointId = hashToken(`${mcpPayload(initialize).result.serverInfo.name}:${planId}:daily-spending-coach`);
+    expect(checkpointId).toHaveLength(64);
 
     const metadata = await request(app).get("/.well-known/oauth-protected-resource/mcp");
     expect(metadata.status).toBe(200);
