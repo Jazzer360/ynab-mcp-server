@@ -74,6 +74,10 @@ function monthOf(date: string): string {
   return date.slice(0, 7);
 }
 
+function apiMonth(value: string): string {
+  return value === "current" ? value : \`${value}-01\`;
+}
+
 export class YnabClient {
   constructor(
     private readonly accessToken: string,
@@ -96,7 +100,7 @@ export class YnabClient {
     const encoded = encodeURIComponent(planId);
     const [accountsData, monthData, settingsData] = await Promise.all([
       this.request(`/plans/${encoded}/accounts`),
-      this.request(`/plans/${encoded}/months/${encodeURIComponent(month)}`),
+      this.request(`/plans/${encoded}/months/${encodeURIComponent(apiMonth(month))}`),
       this.request(`/plans/${encoded}/settings`).catch(() => ({})),
     ]);
     const monthRecord = object(monthData.month);
@@ -142,7 +146,7 @@ export class YnabClient {
     for (let index = 0; index < months.length; index += 4) {
       const batch = months.slice(index, index + 4);
       const records = await Promise.all(
-        batch.map((month) => this.request(`/plans/${encodeURIComponent(planId)}/months/${month}`)),
+        batch.map((month) => this.request(`/plans/${encodeURIComponent(planId)}/months/${apiMonth(month)}`)),
       );
       results.push(...records);
     }
