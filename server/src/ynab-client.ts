@@ -75,7 +75,7 @@ function monthOf(date: string): string {
 }
 
 function apiMonth(value: string): string {
-  return value === "current" ? value : \`${value}-01\`;
+  return value === "current" ? value : `${value}-01`;
 }
 
 export class YnabClient {
