@@ -37,6 +37,18 @@ describe("read-only YNAB client", () => {
     expect(snapshot.currency.iso_code).toBe("USD");
   });
 
+  it("converts a YYYY-MM snapshot month to YNAB's YYYY-MM-01 path", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ plans: [{ id: "11111111-1111-4111-8111-111111111111", name: "Plan" }] }))
+      .mockResolvedValueOnce(jsonResponse({ accounts: [] }))
+      .mockResolvedValueOnce(jsonResponse({ month: { month: "2026-08-01", categories: [] } }))
+      .mockResolvedValueOnce(jsonResponse({ settings: {} }));
+
+    await new YnabClient("token", fetchMock).financialSnapshot(undefined, "2026-08");
+
+    expect(fetchMock.mock.calls[2]?.[0].toString()).toContain("/months/2026-08-01");
+  });
+
   it("excludes transfers from cash-flow totals", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({ plans: [{ id: "11111111-1111-4111-8111-111111111111", name: "Plan" }] }))
